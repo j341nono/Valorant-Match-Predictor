@@ -3,13 +3,25 @@ import json
 from torch.utils.data import Dataset, DataLoader
 import torch
 import torch.nn as nn
+import torch.optim as optim
+from tqdm import tqdm
 import logging
 from sklearn.model_selection import train_test_split
 
 
+MODEL_TYPE="mlp_model"
 SAVE_MATCH_DATA="data/processed/match_data.jsonl"
-TEST_SPLIT_RATIO=0.3
+VALID_SPLIT_RATIO=0.1
+TEST_SPLIT_RATIO=1/9
+BATCH_SIZE=64
+EMBEDDING_DIM=32
+LEARNING_RATE=1e-3
+EPOCHS=10
+MODEL_SAVE_PATH="outputs/"+MODEL_TYPE
+RESULT_SAVE_PATH="results/"+MODEL_TYPE+"/test_results.jsonl"
 
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 class MatchOutcomePredictor(nn.Module):
     def __init__(self, num_teams, embedding_dim=32):
@@ -91,21 +103,109 @@ def debug():
     print(f"idx_to_team: {idx_to_team}")
 
 
-# def main():
-#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#     logging.info(f"Using device] {device}")
+def main():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logging.info(f"Using device] {device}")
 
-#     processed_data, team_to_idx, idx_to_team = load_data_and_preprocess(SAVE_MATCH_DATA)
-#     num_teams = len(team_to_idx)
-#     logging.info(f"Total unique teams: {num_teams}")
-#     logging.info(f"Total matches loaded: {len(processed_data)}")
+    processed_data, team_to_idx, idx_to_team = load_data_and_preprocess(SAVE_MATCH_DATA)
+    
+    num_teams = len(team_to_idx)
+    logging.info(f"Total unique teams: {num_teams}")
+    logging.info(f"Total matches loaded: {len(processed_data)}")
 
-#     train_data, valid_data = train_test_split(processed_data, test_size=TEST_SPLIT_RATIO, random_state=33)
-#     train_dataset = MatchDataset(train_data)
-#     valid_dataset = MatchDataset(valid_data)
+    train_data, test_data = train_test_split(processed_data, test_size=TEST_SPLIT_RATIO, random_state=33)
+    train_data, valid_data = train_test_split(train_data, test_size=VALID_SPLIT_RATIO, random_state=33)
 
-#     train_loader = DataLoader()
+    logging.info(f"Train data size: {len(train_data)}")
+    logging.info(f"Validation data size: {len(valid_data)}")
+    logging.info(f"Test data size: {len(test_data)}")
+
+    train_dataset = MatchDataset(train_data)
+    valid_dataset = MatchDataset(valid_data)
+    test_dataset = MatchDataset(test_data)
+
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    valid_loader = DataLoader(valid_dataset, batch_size=BATCH_SIZE)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE)
+
+    model = MatchOutcomePredictor(num_teams=num_teams, embedding_dim=EMBEDDING_DIM).to(device)
+    criterion = nn.BCELoss()
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+
+    for epoch in range(EPOCHS):
+        model.train()
+        total_train_loss = 0
+        for batch in tqdm(train_loader):
+            team1_ids = batch["team1_id"].to(device)
+            team2_ids = batch["team2_id"].to(device)
+            score1 = batch["score1"].to(device)
+            score2 = batch["score2"].to(device)
+            labels = batch["label"].to(device)
+
+            optimizer.zero_grad()
+            outputs = model(team1_ids, team2_ids, score1, score2)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            total_train_loss += loss.item()
+        
+        model.eval()
+        total_valid_loss = 0
+        correct_predictions = 0
+        with torch.no_grad():
+            for batch in valid_loader:
+                team1_ids = batch["team1_id"].to(device)
+                team2_ids = batch["team2_id"].to(device)
+                score1 = batch["score1"].to(device)
+                score2 = batch["score2"].to(device)
+                labels = batch["label"].to(device)
+                
+                outputs = model(team1_ids, team2_ids, score1, score2)
+                loss = criterion(outputs, labels)
+                total_valid_loss += loss.item()
+
+                predicted = (outputs > 0.5).float()
+                correct_predictions += (predicted == labels).sum().item()
+        
+        avg_train_loss = total_train_loss / len(train_loader)
+        avg_valid_loss = total_valid_loss / len(valid_loader)
+        valid_acc = correct_predictions / len(valid_dataset)
+        print(f"Epoch {epoch+1}/{EPOCHS} -> Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_valid_loss:.4f}, Val Accuracy: {valid_acc:.4f}")
+
+    logging.info("Starting Test Phase")
+    logging.info(f"Saving test results to {RESULT_SAVE_PATH}")
+    model.eval()
+    total_test_loss = 0
+    correct_test_predictions = 0
+    
+    with torch.no_grad():
+        for batch in tqdm(test_loader, desc="Testing"):
+            team1_ids = batch["team1_id"].to(device)
+            team2_ids = batch["team2_id"].to(device)
+            score1 = batch["score1"].to(device)
+            score2 = batch["score2"].to(device)
+            labels = batch["label"].to(device)
+
+            outputs = model(team1_ids, team2_ids, score1, score2)
+            loss = criterion(outputs, labels)
+            total_test_loss += loss.item()
+
+            predicted = (outputs > 0.5).float()
+            correct_test_predictions += (predicted == labels).sum().item()
+
+    avg_test_loss = total_test_loss / len(test_loader)
+    test_acc = correct_test_predictions / len(test_dataset)
+    print(f"Test Results -> Test Loss: {avg_test_loss:.4f}, Test Accuracy: {test_acc:.4f}")
+
+    torch.save({
+        "model_state_dict": model.state_dict(),
+        "team_to_idx": team_to_idx,
+        "embedding_dim": EMBEDDING_DIM
+    }, MODEL_SAVE_PATH)
+    logging.info(f"Model saved to {MODEL_SAVE_PATH}")
+
+
 
 
 if __name__ == "__main__":
-    debug()
+    main()
