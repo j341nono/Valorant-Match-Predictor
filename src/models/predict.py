@@ -1,14 +1,19 @@
 import torch
 import json
 import torch.nn as nn
+import argparse
 
 MODEL_SAVE_PATH="outputs/mlp_model"
 SAVE_MATCH_DATA="data/processed/match_data.jsonl"
 
 
-# =========================
-# モデル定義
-# =========================
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--team1", type=str, required=True)
+    parser.add_argument("--team2", type=str, required=True)
+    return parser.parse_args()
+
+
 class MatchOutcomePredictor(nn.Module):
     def __init__(self, num_teams, embedding_dim, hidden_dims, dropout_rate, extra_features_dim=8):
         super().__init__()
@@ -34,9 +39,6 @@ class MatchOutcomePredictor(nn.Module):
         return self.sigmoid(x).squeeze()
 
 
-# =========================
-# チーム統計量を計算
-# =========================
 def build_team_stats(data):
     stats = {}
     for item in data:
@@ -62,13 +64,9 @@ def build_team_stats(data):
     return stats
 
 
-# =========================
-# 予測関数
-# =========================
-def predict_match(team1_name, team2_name):
+def predict_match(team1_name: str, team2_name: str):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # モデルと辞書をロード
     checkpoint = torch.load(MODEL_SAVE_PATH, map_location=device)
     team_to_idx = checkpoint["team_to_idx"]
     embedding_dim = checkpoint["embedding_dim"]
@@ -80,7 +78,6 @@ def predict_match(team1_name, team2_name):
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 
-    # 試合データから統計量を計算
     raw_data = []
     with open(SAVE_MATCH_DATA, "r", encoding="utf-8") as f:
         for line in f:
@@ -90,7 +87,6 @@ def predict_match(team1_name, team2_name):
     if team1_name not in team_to_idx or team2_name not in team_to_idx:
         raise ValueError("指定したチームが辞書に存在しません")
 
-    # 特徴量作成
     extra_features = [
         stats[team1_name]["avg_points_for"], stats[team1_name]["avg_points_against"],
         stats[team1_name]["avg_diff"], stats[team1_name]["win_rate"],
@@ -109,8 +105,6 @@ def predict_match(team1_name, team2_name):
     return prob
 
 
-# =========================
-# 実行例
-# =========================
 if __name__ == "__main__":
-    predict_match("TeamA", "TeamB")
+    args = parse_args()
+    predict_match(args.team1, args.team2)
