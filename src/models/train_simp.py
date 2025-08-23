@@ -1,15 +1,13 @@
 import torch
 import json
 from torch.utils.data import Dataset, DataLoader
-import torch
 import torch.nn as nn
 import torch.optim as optim
 from tqdm import tqdm
 import logging
 from sklearn.model_selection import train_test_split
 
-
-MODEL_TYPE="mlp_model"
+MODEL_TYPE="mlp_model_simp"
 SAVE_MATCH_DATA="data/processed/match_data.jsonl"
 VALID_SPLIT_RATIO=0.1
 TEST_SPLIT_RATIO=1/9
@@ -18,51 +16,25 @@ EMBEDDING_DIM=32
 LEARNING_RATE=1e-3
 EPOCHS=10
 MODEL_SAVE_PATH="outputs/"+MODEL_TYPE
-RESULT_SAVE_PATH="results/"+MODEL_TYPE+"/test_results.jsonl"
-
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-class MatchOutcomePredictor(nn.Module):
-    def __init__(self, num_teams, embedding_dim=32):
-        super().__init__()
-        self.team_embedding = nn.Embedding(num_embeddings=num_teams, embedding_dim=embedding_dim)
-        input_dim = embedding_dim * 2 + 2
-        self.layers = nn.Sequential(
-            nn.Linear(input_dim, 128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(64, 1)
-        )
-        self.sigmoid = nn.Sigmoid()
-    
-    def forward(self, team1_id, team2_id, score1, score2):
-        team1_embed = self.team_embedding(team1_id)
-        team2_embed = self.team_embedding(team2_id)
-        scores = torch.stack([score1, score2], dim=1).float()
-        x = torch.cat([team1_embed, team2_embed, scores], dim=1)
-        x = self.layers(x)
-        output = self.sigmoid(x)
-        return output.squeeze()
 
-
+# -------------------------------
+# データロードと前処理（勝敗のみ）
+# -------------------------------
 def load_data_and_preprocess(filepath: str):
     raw_data = []
     with open(filepath, "r", encoding="utf-8") as f:
         for line in f:
             raw_data.append(json.loads(line))
 
+    # チームID辞書作成
     all_teams = set()
     for item in raw_data:
         all_teams.add(item["team1"])
         all_teams.add(item["team2"])
-
-    team_to_idx = {
-        team: i for i, team in enumerate(sorted(list(all_teams)))
-    }
+    team_to_idx = {team: i for i, team in enumerate(sorted(list(all_teams)))}
     idx_to_team = {i: team for team, i in team_to_idx.items()}
 
     processed_data = []
@@ -72,12 +44,14 @@ def load_data_and_preprocess(filepath: str):
         processed_data.append({
             "team1_id": team_to_idx[item["team1"]],
             "team2_id": team_to_idx[item["team2"]],
-            "score1": s1,
-            "score2": s2,
             "label": 1.0 if s1 > s2 else 0.0
         })
     return processed_data, team_to_idx, idx_to_team
 
+
+# -------------------------------
+# Dataset
+# -------------------------------
 class MatchDataset(Dataset):
     def __init__(self, data):
         self.data = data
@@ -90,22 +64,44 @@ class MatchDataset(Dataset):
         return {
             "team1_id": torch.tensor(item["team1_id"], dtype=torch.long),
             "team2_id": torch.tensor(item["team2_id"], dtype=torch.long),
-            "score1": torch.tensor(item["score1"], dtype=torch.float),
-            "score2": torch.tensor(item["score2"], dtype=torch.float),
             "label": torch.tensor(item["label"], dtype=torch.float)
         }
 
 
-def debug():
-    processed_data, team_to_idx, idx_to_team = load_data_and_preprocess(SAVE_MATCH_DATA)
-    print(processed_data[0])
-    print(f"team_to_idx: {team_to_idx}")
-    print(f"idx_to_team: {idx_to_team}")
+# -------------------------------
+# モデル定義（勝敗のみ）
+# -------------------------------
+class MatchOutcomePredictorSimple(nn.Module):
+    def __init__(self, num_teams, embedding_dim, hidden_dims, dropout_rate):
+        super().__init__()
+        self.team_embedding = nn.Embedding(num_embeddings=num_teams, embedding_dim=embedding_dim)
+        
+        input_dim = embedding_dim * 2
+        layers = []
+        for hidden_dim in hidden_dims:
+            layers.append(nn.Linear(input_dim, hidden_dim))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(dropout_rate))
+            input_dim = hidden_dim
+
+        layers.append(nn.Linear(input_dim, 1))
+        self.layers = nn.Sequential(*layers)
+        self.sigmoid = nn.Sigmoid()
+    
+    def forward(self, team1_id, team2_id):
+        team1_embed = self.team_embedding(team1_id)
+        team2_embed = self.team_embedding(team2_id)
+        x = torch.cat([team1_embed, team2_embed], dim=1)
+        x = self.layers(x)
+        return self.sigmoid(x).squeeze()
 
 
+# -------------------------------
+# 学習ループ
+# -------------------------------
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logging.info(f"Using device] {device}")
+    logging.info(f"Using device {device}")
 
     processed_data, team_to_idx, idx_to_team = load_data_and_preprocess(SAVE_MATCH_DATA)
     
@@ -116,10 +112,6 @@ def main():
     train_data, test_data = train_test_split(processed_data, test_size=TEST_SPLIT_RATIO, random_state=33)
     train_data, valid_data = train_test_split(train_data, test_size=VALID_SPLIT_RATIO, random_state=33)
 
-    logging.info(f"Train data size: {len(train_data)}")
-    logging.info(f"Validation data size: {len(valid_data)}")
-    logging.info(f"Test data size: {len(test_data)}")
-
     train_dataset = MatchDataset(train_data)
     valid_dataset = MatchDataset(valid_data)
     test_dataset = MatchDataset(test_data)
@@ -128,7 +120,10 @@ def main():
     valid_loader = DataLoader(valid_dataset, batch_size=BATCH_SIZE)
     test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE)
 
-    model = MatchOutcomePredictor(num_teams=num_teams, embedding_dim=EMBEDDING_DIM).to(device)
+    model = MatchOutcomePredictorSimple(
+        num_teams=num_teams, embedding_dim=EMBEDDING_DIM, hidden_dims=[64, 32], dropout_rate=0.3
+    ).to(device)
+
     criterion = nn.BCELoss()
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
@@ -138,17 +133,16 @@ def main():
         for batch in tqdm(train_loader):
             team1_ids = batch["team1_id"].to(device)
             team2_ids = batch["team2_id"].to(device)
-            score1 = batch["score1"].to(device)
-            score2 = batch["score2"].to(device)
             labels = batch["label"].to(device)
 
             optimizer.zero_grad()
-            outputs = model(team1_ids, team2_ids, score1, score2)
+            outputs = model(team1_ids, team2_ids)
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
             total_train_loss += loss.item()
         
+        # 検証
         model.eval()
         total_valid_loss = 0
         correct_predictions = 0
@@ -156,11 +150,9 @@ def main():
             for batch in valid_loader:
                 team1_ids = batch["team1_id"].to(device)
                 team2_ids = batch["team2_id"].to(device)
-                score1 = batch["score1"].to(device)
-                score2 = batch["score2"].to(device)
                 labels = batch["label"].to(device)
                 
-                outputs = model(team1_ids, team2_ids, score1, score2)
+                outputs = model(team1_ids, team2_ids)
                 loss = criterion(outputs, labels)
                 total_valid_loss += loss.item()
 
@@ -172,8 +164,8 @@ def main():
         valid_acc = correct_predictions / len(valid_dataset)
         print(f"Epoch {epoch+1}/{EPOCHS} -> Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_valid_loss:.4f}, Val Accuracy: {valid_acc:.4f}")
 
+
     logging.info("Starting Test Phase")
-    logging.info(f"Saving test results to {RESULT_SAVE_PATH}")
     model.eval()
     total_test_loss = 0
     correct_test_predictions = 0
@@ -182,11 +174,9 @@ def main():
         for batch in tqdm(test_loader, desc="Testing"):
             team1_ids = batch["team1_id"].to(device)
             team2_ids = batch["team2_id"].to(device)
-            score1 = batch["score1"].to(device)
-            score2 = batch["score2"].to(device)
             labels = batch["label"].to(device)
 
-            outputs = model(team1_ids, team2_ids, score1, score2)
+            outputs = model(team1_ids, team2_ids)
             loss = criterion(outputs, labels)
             total_test_loss += loss.item()
 
@@ -203,8 +193,6 @@ def main():
         "embedding_dim": EMBEDDING_DIM
     }, MODEL_SAVE_PATH)
     logging.info(f"Model saved to {MODEL_SAVE_PATH}")
-
-
 
 
 if __name__ == "__main__":
