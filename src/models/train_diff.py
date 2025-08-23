@@ -21,9 +21,6 @@ RESULT_SAVE_PATH="results/"+MODEL_TYPE+"/test_results.jsonl"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-# -------------------------------
-# チームごとの統計量を計算
-# -------------------------------
 def build_team_stats(data):
     stats = {}
     for item in data:
@@ -40,7 +37,6 @@ def build_team_stats(data):
             stats[team]["games"] += 1
             stats[team]["wins"] += int(win)
 
-    # 平均化
     for team, st in stats.items():
         st["avg_points_for"] = st["points_for"] / st["games"]
         st["avg_points_against"] = st["points_against"] / st["games"]
@@ -50,9 +46,6 @@ def build_team_stats(data):
     return stats
 
 
-# -------------------------------
-# データロードと前処理
-# -------------------------------
 def load_data_and_preprocess(filepath: str):
     raw_data = []
     with open(filepath, "r", encoding="utf-8") as f:
@@ -93,9 +86,6 @@ def load_data_and_preprocess(filepath: str):
     return processed_data, team_to_idx, idx_to_team
 
 
-# -------------------------------
-# Dataset
-# -------------------------------
 class MatchDataset(Dataset):
     def __init__(self, data):
         self.data = data
@@ -117,9 +107,6 @@ class MatchDataset(Dataset):
         }
 
 
-# -------------------------------
-# モデル定義
-# -------------------------------
 class MatchOutcomePredictor(nn.Module):
     def __init__(self, num_teams, embedding_dim, hidden_dims, dropout_rate, extra_features_dim=8):
         super().__init__()
@@ -145,9 +132,6 @@ class MatchOutcomePredictor(nn.Module):
         return self.sigmoid(x).squeeze()
 
 
-# -------------------------------
-# 学習ループ
-# -------------------------------
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device {device}")
@@ -192,7 +176,7 @@ def main():
             optimizer.step()
             total_train_loss += loss.item()
         
-        # 検証
+        
         model.eval()
         total_valid_loss = 0
         correct_predictions = 0

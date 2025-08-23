@@ -20,16 +20,12 @@ MODEL_SAVE_PATH="outputs/"+MODEL_TYPE
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 
-# -------------------------------
-# データロードと前処理（勝敗のみ）
-# -------------------------------
 def load_data_and_preprocess(filepath: str):
     raw_data = []
     with open(filepath, "r", encoding="utf-8") as f:
         for line in f:
             raw_data.append(json.loads(line))
 
-    # チームID辞書作成
     all_teams = set()
     for item in raw_data:
         all_teams.add(item["team1"])
@@ -49,9 +45,6 @@ def load_data_and_preprocess(filepath: str):
     return processed_data, team_to_idx, idx_to_team
 
 
-# -------------------------------
-# Dataset
-# -------------------------------
 class MatchDataset(Dataset):
     def __init__(self, data):
         self.data = data
@@ -68,9 +61,6 @@ class MatchDataset(Dataset):
         }
 
 
-# -------------------------------
-# モデル定義（勝敗のみ）
-# -------------------------------
 class MatchOutcomePredictorSimple(nn.Module):
     def __init__(self, num_teams, embedding_dim, hidden_dims, dropout_rate):
         super().__init__()
@@ -96,9 +86,6 @@ class MatchOutcomePredictorSimple(nn.Module):
         return self.sigmoid(x).squeeze()
 
 
-# -------------------------------
-# 学習ループ
-# -------------------------------
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device {device}")
@@ -142,7 +129,6 @@ def main():
             optimizer.step()
             total_train_loss += loss.item()
         
-        # 検証
         model.eval()
         total_valid_loss = 0
         correct_predictions = 0
